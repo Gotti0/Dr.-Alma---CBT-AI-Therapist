@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
-import { cognitiveDistortions, socraticPatterns, safetyProtocol, sessionStructure } from './knowledgeBase';
+import { safetyProtocol, sessionStructure } from './knowledgeBase';
+import { GOOGLE_SEARCH_DUMMY_ID } from './knowledgeManager';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -38,12 +39,16 @@ ${safetyProtocol}
 - DO NOT offer empty reassurances (e.g., do not say "Everything will be fine"). Instead, emphasize building realistic coping mechanisms and problem-solving skills (e.g., "Let's examine this problem together").
 
 ## Knowledge Base
-${cognitiveDistortions}
-${socraticPatterns}
 ${sessionStructure}
 `;
 
-export async function sendMessageStream(model: string, history: { role: 'user' | 'model', text: string }[], message: string) {
+export async function sendMessageStream(
+  model: string,
+  history: { role: 'user' | 'model', text: string }[],
+  message: string,
+  contextString?: string,
+  fileSearchStoreNames?: string[]
+) {
   const contents = history.map(h => ({
     role: h.role,
     parts: [{ text: h.text }]
@@ -54,14 +59,74 @@ export async function sendMessageStream(model: string, history: { role: 'user' |
     parts: [{ text: message }]
   });
 
+  let finalInstruction = systemInstruction;
+
+  if (contextString) {
+    finalInstruction += `\n\n[System Runtime Context - User's Long-Term Memory]\n${contextString}\n(Note: The above memories are retrieved from past sessions. Use them to provide personalized responses if relevant.)`;
+  }
+
+  const config: any = {
+    systemInstruction: finalInstruction,
+    temperature: 0.7,
+  };
+
+  if (fileSearchStoreNames && fileSearchStoreNames.length > 0) {
+    config.tools = [];
+
+    // Check if Google Search tool is requested
+    if (fileSearchStoreNames.includes(GOOGLE_SEARCH_DUMMY_ID)) {
+      config.tools.push({
+        googleSearch: {}
+      });
+    }
+
+    // Filter out the dummy ID to get only valid File Search Store names
+    const validStoreNames = fileSearchStoreNames.filter(name => name !== GOOGLE_SEARCH_DUMMY_ID);
+
+    if (validStoreNames.length > 0) {
+      config.tools.push({
+        fileSearch: {
+          fileSearchStoreNames: validStoreNames
+        }
+      });
+    }
+
+    // If no tools were actually added (e.g., only dummy was selected but it failed), remove the empty array
+    if (config.tools.length === 0) {
+      delete config.tools;
+    }
+  }
+
   const responseStream = await ai.models.generateContentStream({
     model: model,
     contents: contents,
-    config: {
-      systemInstruction: systemInstruction,
-      temperature: 0.7,
-    }
+    config: config
   });
 
   return responseStream;
+}
+
+export async function generateEmbedding(text: string, isQuery: boolean = true): Promise<number[]> {
+  try {
+    const response = await ai.models.embedContent({
+      model: 'gemini-embedding-001',
+      contents: text,
+      config: {
+        taskType: isQuery ? 'RETRIEVAL_QUERY' : 'RETRIEVAL_DOCUMENT',
+        outputDimensionality: 768,
+      }
+    });
+
+    // Fallback to deal with potential variance in the response structure based on the Google SDK
+    if ((response as any).embedding && (response as any).embedding.values) {
+      return (response as any).embedding.values;
+    } else if (response.embeddings && response.embeddings.length > 0) {
+      return response.embeddings[0].values;
+    }
+
+    throw new Error('No embedding returned from Gemini API');
+  } catch (error) {
+    console.error('Error generating embedding:', error);
+    throw error;
+  }
 }

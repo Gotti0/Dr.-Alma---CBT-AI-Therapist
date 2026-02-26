@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, User, Bot, Trash2, AlertTriangle } from 'lucide-react';
+import { Send, User, Bot, Trash2, AlertTriangle, Paperclip, Loader2, Database, X, Check, FileText } from 'lucide-react';
 import { sendMessageStream } from '../services/gemini';
 import { ChatMessage, getRecentMessages, saveMessage, cleanExpiredCache, clearAllMessages } from '../services/sessionCache';
+import { retrieveRelevantContext, extractAndSaveMemory } from '../services/memoryManager';
+import { initKnowledgeBase, uploadUserKnowledge, KnowledgeStoreInfo, getKnowledgeStores, deleteKnowledgeStore } from '../services/knowledgeManager';
 import ReactMarkdown from 'react-markdown';
-
 const MODELS = [
   { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (추천)' },
   { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash' },
@@ -20,11 +21,35 @@ export default function ChatInterface() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [selectedModel, setSelectedModel] = useState(MODELS[0].id);
+  const [stores, setStores] = useState<KnowledgeStoreInfo[]>([]);
+  const [activeStoreIds, setActiveStoreIds] = useState<string[]>([]);
+  const [showStoreMenu, setShowStoreMenu] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadStores = () => {
+    const loadedStores = getKnowledgeStores();
+    setStores(loadedStores);
+
+    // By default, activate the base store if we don't have active stores set
+    if (activeStoreIds.length === 0) {
+      const baseStore = loadedStores.find(s => s.isBase);
+      if (baseStore) setActiveStoreIds([baseStore.id]);
+    } else {
+      // Remove any active IDs that no longer exist
+      const existingIds = loadedStores.map(s => s.id);
+      setActiveStoreIds(prev => prev.filter(id => existingIds.includes(id)));
+    }
+  };
 
   useEffect(() => {
     const init = async () => {
+      // Initialize the knowledge base file store in the background
+      await initKnowledgeBase();
+      loadStores();
+
       await cleanExpiredCache();
       const history = await getRecentMessages();
       if (history.length === 0) {
@@ -40,6 +65,21 @@ export default function ChatInterface() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const toggleStoreActive = (id: string) => {
+    setActiveStoreIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const handleDeleteStore = async (id: string) => {
+    if (window.confirm('이 지식 문서를 정말 삭제하시겠습니까? (API 스토어에서도 영구 삭제됩니다)')) {
+      const success = await deleteKnowledgeStore(id);
+      if (success) {
+        loadStores();
+      }
+    }
+  };
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
@@ -57,12 +97,31 @@ export default function ChatInterface() {
     await saveMessage(userMsg);
 
     try {
+      // Retrieve Personal Memory context
+      let retrievedContext = '';
+      try {
+        retrievedContext = await retrieveRelevantContext(userMsg.text);
+      } catch (err) {
+        console.error('Context retrieval failed:', err);
+      }
+
       const historyForApi = messages.map(m => ({ role: m.role, text: m.text }));
-      const stream = await sendMessageStream(selectedModel, historyForApi, userMsg.text);
-      
+
+      const activeStoreNames = stores
+        .filter(s => activeStoreIds.includes(s.id))
+        .map(s => s.storeName);
+
+      const stream = await sendMessageStream(
+        selectedModel,
+        historyForApi,
+        userMsg.text,
+        retrievedContext,
+        activeStoreNames.length > 0 ? activeStoreNames : undefined
+      );
+
       const modelMsgId = (Date.now() + 1).toString();
       let fullText = '';
-      
+
       setMessages(prev => [...prev, {
         id: modelMsgId,
         role: 'model',
@@ -73,7 +132,7 @@ export default function ChatInterface() {
       for await (const chunk of stream) {
         const chunkText = (chunk as any).text || '';
         fullText += chunkText;
-        setMessages(prev => prev.map(msg => 
+        setMessages(prev => prev.map(msg =>
           msg.id === modelMsgId ? { ...msg, text: fullText } : msg
         ));
       }
@@ -84,6 +143,9 @@ export default function ChatInterface() {
         text: fullText,
         timestamp: Date.now(),
       });
+
+      // Background task to save memory chunk
+      extractAndSaveMemory(userMsg.text, fullText).catch(console.error);
 
     } catch (error) {
       console.error('Error sending message:', error);
@@ -107,6 +169,55 @@ export default function ChatInterface() {
     }
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reset input so the same file can be selected again
+    e.target.value = '';
+
+    setIsUploadingFile(true);
+
+    // Add temporary message indicating upload start
+    const uploadStartMsg: ChatMessage = {
+      id: Date.now().toString(),
+      role: 'model',
+      text: `\`${file.name}\` 지식 문서를 업로드하고 있습니다...`,
+      timestamp: Date.now()
+    };
+    setMessages(prev => [...prev, uploadStartMsg]);
+
+    const success = await uploadUserKnowledge(file);
+
+    setIsUploadingFile(false);
+
+    if (success) {
+      loadStores();
+      if (success.id) {
+        setActiveStoreIds(prev => [...prev, success.id]);
+      }
+      setMessages(prev => [
+        ...prev.filter(m => m.id !== uploadStartMsg.id),
+        {
+          id: Date.now().toString(),
+          role: 'model',
+          text: `✅ 성공적으로 \`${file.name}\` 지식 문서를 학습했습니다. (지식 제어 메뉴에서 켜고 끌 수 있습니다)`,
+          timestamp: Date.now()
+        }
+      ]);
+    } else {
+      setMessages(prev => [
+        ...prev.filter(m => m.id !== uploadStartMsg.id),
+        {
+          id: Date.now().toString(),
+          role: 'model',
+          text: `❌ \`${file.name}\` 파일 업로드에 실패했습니다. 다시 시도해 주세요.`,
+          timestamp: Date.now()
+        }
+      ]);
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen bg-stone-50 font-sans">
       {/* Header */}
@@ -121,7 +232,7 @@ export default function ChatInterface() {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <select 
+          <select
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
             className="text-sm border border-stone-300 rounded-md px-3 py-1.5 bg-stone-50 text-stone-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
@@ -130,7 +241,7 @@ export default function ChatInterface() {
               <option key={m.id} value={m.id}>{m.name}</option>
             ))}
           </select>
-          <button 
+          <button
             onClick={handleClearChat}
             className="text-stone-400 hover:text-red-500 transition-colors p-2 rounded-md hover:bg-stone-100"
             title="대화 초기화"
@@ -143,21 +254,19 @@ export default function ChatInterface() {
       {/* Chat Area */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
         {messages.map((msg) => (
-          <div 
-            key={msg.id} 
+          <div
+            key={msg.id}
             className={`flex gap-4 max-w-3xl mx-auto ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
           >
-            <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
-              msg.role === 'user' ? 'bg-stone-800 text-white' : 'bg-emerald-100 text-emerald-700'
-            }`}>
+            <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${msg.role === 'user' ? 'bg-stone-800 text-white' : 'bg-emerald-100 text-emerald-700'
+              }`}>
               {msg.role === 'user' ? <User size={16} /> : <Bot size={16} />}
             </div>
             <div className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-              <div className={`px-5 py-3.5 rounded-2xl shadow-sm ${
-                msg.role === 'user' 
-                  ? 'bg-stone-800 text-white rounded-tr-sm' 
-                  : 'bg-white border border-stone-200 text-stone-800 rounded-tl-sm'
-              }`}>
+              <div className={`px-5 py-3.5 rounded-2xl shadow-sm ${msg.role === 'user'
+                ? 'bg-stone-800 text-white rounded-tr-sm'
+                : 'bg-white border border-stone-200 text-stone-800 rounded-tl-sm'
+                }`}>
                 {msg.role === 'model' && msg.text.includes('109') && msg.text.includes('119') ? (
                   <div className="bg-red-50 border border-red-200 text-red-800 p-4 rounded-xl mb-2 flex items-start gap-3">
                     <AlertTriangle className="flex-shrink-0 mt-0.5" size={20} />
@@ -183,27 +292,106 @@ export default function ChatInterface() {
       {/* Input Area */}
       <div className="bg-white border-t border-stone-200 p-4 sm:p-6">
         <div className="max-w-3xl mx-auto relative flex items-end gap-2">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="마음속 이야기를 편하게 들려주세요..."
-            className="w-full bg-stone-50 border border-stone-300 rounded-2xl px-4 py-3.5 pr-12 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none min-h-[56px] max-h-32 text-stone-800"
-            rows={1}
-            style={{ height: 'auto' }}
+
+          {/* Knowledge Control Popover */}
+          <div className="relative">
+            <button
+              onClick={() => setShowStoreMenu(!showStoreMenu)}
+              className={`p-3 transition-colors rounded-xl ${showStoreMenu ? 'bg-emerald-100 text-emerald-700' : 'text-stone-400 hover:text-emerald-600 hover:bg-stone-50'}`}
+              title="지식 베이스 제어"
+            >
+              <Database size={20} />
+              {activeStoreIds.length > 0 && (
+                <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white"></span>
+              )}
+            </button>
+
+            {showStoreMenu && (
+              <div className="absolute bottom-full left-0 mb-2 w-72 bg-white rounded-2xl shadow-xl border border-stone-200 p-3 z-50">
+                <div className="flex justify-between items-center mb-3 px-1">
+                  <h3 className="text-sm font-semibold text-stone-800">지식 베이스 관리</h3>
+                  <button onClick={() => setShowStoreMenu(false)} className="text-stone-400 hover:text-stone-600">
+                    <X size={16} />
+                  </button>
+                </div>
+                <div className="space-y-1 max-h-60 overflow-y-auto pr-1">
+                  {stores.length === 0 ? (
+                    <p className="text-xs text-stone-500 italic p-2">업로드된 지식이 없습니다.</p>
+                  ) : (
+                    stores.map(store => (
+                      <div key={store.id} className="flex items-center justify-between p-2 hover:bg-stone-50 rounded-lg group">
+                        <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                          <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 border ${activeStoreIds.includes(store.id) ? 'bg-emerald-500 border-emerald-500' : 'border-stone-300'}`}>
+                            {activeStoreIds.includes(store.id) && <Check size={12} className="text-white" />}
+                          </div>
+                          <input
+                            type="checkbox"
+                            className="hidden"
+                            checked={activeStoreIds.includes(store.id)}
+                            onChange={() => toggleStoreActive(store.id)}
+                          />
+                          <FileText size={14} className="text-stone-400 flex-shrink-0" />
+                          <span className="text-xs font-medium text-stone-700 truncate">{store.displayName}</span>
+                        </label>
+                        {!store.isBase && (
+                          <button
+                            onClick={(e) => { e.preventDefault(); handleDeleteStore(store.id); }}
+                            className="text-stone-300 hover:text-red-500 p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="삭제"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                        {store.isBase && (
+                          <span className="text-[9px] bg-stone-100 text-stone-500 px-1.5 py-0.5 rounded ml-2 flex-shrink-0">기본</span>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileUpload}
+            accept=".txt,.md,.pdf"
+            className="hidden"
           />
           <button
-            onClick={handleSend}
-            disabled={!input.trim() || isLoading}
-            className="absolute right-2 bottom-2 p-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-stone-300 text-white rounded-xl transition-colors flex items-center justify-center"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploadingFile || isLoading}
+            className="p-3 text-stone-400 hover:text-emerald-600 transition-colors disabled:opacity-50 hover:bg-stone-50 rounded-xl"
+            title="새로운 지식 문서 업로드 (.txt, .md, .pdf)"
           >
-            <Send size={18} />
+            {isUploadingFile ? <Loader2 size={20} className="animate-spin text-emerald-600" /> : <Paperclip size={20} />}
           </button>
+
+          <div className="relative flex-1">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder="마음속 이야기를 편하게 들려주세요..."
+              className="w-full bg-stone-50 border border-stone-300 rounded-2xl px-4 py-3.5 pr-12 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none min-h-[56px] max-h-32 text-stone-800"
+              rows={1}
+              style={{ height: 'auto' }}
+            />
+            <button
+              onClick={handleSend}
+              disabled={!input.trim() || isLoading}
+              className="absolute right-2 bottom-2 p-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-stone-300 text-white rounded-xl transition-colors flex items-center justify-center"
+            >
+              <Send size={18} />
+            </button>
+          </div>
         </div>
         <p className="text-center text-[10px] text-stone-400 mt-3">
           AI는 전문적인 의료 진단을 제공하지 않습니다. 위급한 상황일 경우 119 또는 109(자살예방상담전화)로 연락하세요.

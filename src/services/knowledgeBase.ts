@@ -1,27 +1,30 @@
-export const cognitiveDistortions = `
-10 Cognitive Distortions:
-1. All-or-Nothing Thinking: Perceiving situations only in dichotomous categories. (e.g., If it's not perfect, it's a failure)
-2. Overgeneralization: Interpreting a single negative event as a never-ending pattern of defeat. (e.g., This always happens to me)
-3. Mental Filtering: Dwelling entirely on negative details while filtering out all positive elements.
-4. Discounting the Positive: Dismissing positive experiences or achievements as flukes or worthless.
-5. Jumping to Conclusions:
-   - Mind Reading: Being certain of others' negative thoughts without evidence.
-   - Fortune Telling: Predicting that things will turn out badly as an established fact.
-6. Magnification/Minimization: Exaggerating the importance of one's mistakes or shrinking one's own positive traits and others' achievements.
-7. Emotional Reasoning: Using emotions as evidence for objective reality. (e.g., I feel anxious, so something bad must be about to happen)
-8. Should Statements: Forcing unrealistic rules on oneself or others. (e.g., I "must" or "should" do this)
-9. Labeling: Defining oneself or others with negative nouns instead of describing specific behaviors. (e.g., I am a loser)
-10. Personalization: Feeling responsible for events over which one has no control.
-`;
+export interface KnowledgeChunk {
+   id: string;
+   type: 'distortion' | 'socratic_pattern';
+   title: string;
+   content: string;
+}
 
-export const socraticPatterns = `
-Socratic Questioning Patterns:
-1. Evidence-Based Verification: "What is the evidence that this thought is true? Is there any evidence to the contrary?"
-2. Exploring Alternative Perspectives: "What advice would you give your best friend if they were in the exact same situation?"
-3. Decatastrophizing: "If the absolute worst-case scenario were to happen, how could you cope with it?"
-4. Utility Analysis: "Is continuing to hold onto this thought helping you solve the problem?"
-5. Clarification of Meaning and Definition: "What exactly is your definition of a 'complete failure'?"
-`;
+export const cognitiveDistortions: KnowledgeChunk[] = [
+   { id: 'dist_1', type: 'distortion', title: 'All-or-Nothing Thinking', content: 'Perceiving situations only in dichotomous categories. (e.g., If it\'s not perfect, it\'s a failure)' },
+   { id: 'dist_2', type: 'distortion', title: 'Overgeneralization', content: 'Interpreting a single negative event as a never-ending pattern of defeat. (e.g., This always happens to me)' },
+   { id: 'dist_3', type: 'distortion', title: 'Mental Filtering', content: 'Dwelling entirely on negative details while filtering out all positive elements.' },
+   { id: 'dist_4', type: 'distortion', title: 'Discounting the Positive', content: 'Dismissing positive experiences or achievements as flukes or worthless.' },
+   { id: 'dist_5', type: 'distortion', title: 'Jumping to Conclusions (Mind Reading/Fortune Telling)', content: 'Being certain of others\' negative thoughts without evidence, or predicting that things will turn out badly as an established fact.' },
+   { id: 'dist_6', type: 'distortion', title: 'Magnification/Minimization', content: 'Exaggerating the importance of one\'s mistakes or shrinking one\'s own positive traits and others\' achievements.' },
+   { id: 'dist_7', type: 'distortion', title: 'Emotional Reasoning', content: 'Using emotions as evidence for objective reality. (e.g., I feel anxious, so something bad must be about to happen)' },
+   { id: 'dist_8', type: 'distortion', title: 'Should Statements', content: 'Forcing unrealistic rules on oneself or others. (e.g., I "must" or "should" do this)' },
+   { id: 'dist_9', type: 'distortion', title: 'Labeling', content: 'Defining oneself or others with negative nouns instead of describing specific behaviors. (e.g., I am a loser)' },
+   { id: 'dist_10', type: 'distortion', title: 'Personalization', content: 'Feeling responsible for events over which one has no control.' }
+];
+
+export const socraticPatterns: KnowledgeChunk[] = [
+   { id: 'soc_1', type: 'socratic_pattern', title: 'Evidence-Based Verification', content: 'What is the evidence that this thought is true? Is there any evidence to the contrary?' },
+   { id: 'soc_2', type: 'socratic_pattern', title: 'Exploring Alternative Perspectives', content: 'What advice would you give your best friend if they were in the exact same situation?' },
+   { id: 'soc_3', type: 'socratic_pattern', title: 'Decatastrophizing', content: 'If the absolute worst-case scenario were to happen, how could you cope with it?' },
+   { id: 'soc_4', type: 'socratic_pattern', title: 'Utility Analysis', content: 'Is continuing to hold onto this thought helping you solve the problem?' },
+   { id: 'soc_5', type: 'socratic_pattern', title: 'Clarification of Meaning and Definition', content: 'What exactly is your definition of a "complete failure"?' }
+];
 
 export const safetyProtocol = `
 Safety Protocol:
