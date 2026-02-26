@@ -73,52 +73,29 @@ export async function initKnowledgeBase(): Promise<KnowledgeStoreInfo | null> {
 
         console.log('Creating new File Search Store and uploading base knowledge document...');
 
-        // 1. Create File Search Store
-        let fileSearchStore;
-        try {
-            fileSearchStore = await ai.fileSearchStores.create({
-                config: { displayName: 'CBT_Base_Knowledge_Store_' + Date.now() }
-            });
-            console.log('Successfully created fileSearchStore:', fileSearchStore.name);
-        } catch (e) {
-            console.error('ERROR during ai.fileSearchStores.create:', e);
-            throw e;
-        }
+        // Create File Search Store
+        const fileSearchStore = await ai.fileSearchStores.create({
+            config: { displayName: 'CBT_Base_Knowledge_Store_' + Date.now() }
+        });
 
         // Create a Blob/File from our static markdown content
         const fileBlob = new Blob([CBT_KNOWLEDGE_DOCUMENT], { type: 'text/plain' });
         const file = new File([fileBlob], 'cbt_knowledge.txt', { type: 'text/plain' });
 
-        // 2. Upload to store
-        let operation;
-        try {
-            operation = await ai.fileSearchStores.uploadToFileSearchStore({
-                file: file,
-                fileSearchStoreName: fileSearchStore.name,
-                config: {
-                    displayName: 'CBT Diagnostic Methods',
-                }
-            });
-            console.log('Successfully started uploadToFileSearchStore. Operation:', operation);
-        } catch (e) {
-            console.error('ERROR during ai.fileSearchStores.uploadToFileSearchStore:', e);
-            throw e;
-        }
+        // Upload to store
+        let operation = await ai.fileSearchStores.uploadToFileSearchStore({
+            file: file,
+            fileSearchStoreName: fileSearchStore.name,
+            config: {
+                displayName: 'CBT Diagnostic Methods',
+            }
+        });
 
         console.log('Waiting for File Search Store upload operation...');
         // Wait for indexing to complete
         while (!operation.done) {
             await new Promise(resolve => setTimeout(resolve, 3000));
-            try {
-                // TEST: Is it operation.name that we must pass? Let's check both possibilities.
-                // The issue strongly smells like passing an object to operations.get incorrectly.
-                console.log('Attempting to poll operation:', operation.name);
-                operation = await ai.operations.get({ operation: operation });
-            } catch (e) {
-                console.error('ERROR during ai.operations.get:', e);
-                // IF passing object fails, try passing just the string name manually (fallback hack)
-                throw e;
-            }
+            operation = await ai.operations.get({ operation: operation });
         }
 
         console.log('Successfully initialized Knowledge Base in Gemini File Store:', fileSearchStore.name);

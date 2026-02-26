@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, User, Bot, Trash2, AlertTriangle, Paperclip, Loader2, Database, X, Check, FileText } from 'lucide-react';
-import { sendMessageStream } from '../services/gemini';
+import { Send, User, Bot, Trash2, AlertTriangle, Paperclip, Loader2, Database, X, Check, FileText, Brain, ChevronDown } from 'lucide-react';
+import { sendMessageStream, StreamChunk, fetchAvailableModels, GeminiModelInfo } from '../services/gemini';
 import { ChatMessage, getRecentMessages, saveMessage, cleanExpiredCache, clearAllMessages } from '../services/sessionCache';
 import { retrieveRelevantContext, extractAndSaveMemory } from '../services/memoryManager';
 import { initKnowledgeBase, uploadUserKnowledge, KnowledgeStoreInfo, getKnowledgeStores, deleteKnowledgeStore } from '../services/knowledgeManager';
 import ReactMarkdown from 'react-markdown';
-const MODELS = [
-  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (추천)' },
-  { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash' },
+const FALLBACK_MODELS: GeminiModelInfo[] = [
+  { id: 'gemini-2.5-flash-preview-05-20', name: 'Gemini 2.5 Flash Preview' },
+  { id: 'gemini-2.5-pro-preview-05-06', name: 'Gemini 2.5 Pro Preview' },
 ];
 
 const WELCOME_MESSAGE: ChatMessage = {
@@ -22,13 +22,18 @@ export default function ChatInterface() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
-  const [selectedModel, setSelectedModel] = useState(MODELS[0].id);
+  const [models, setModels] = useState<GeminiModelInfo[]>(FALLBACK_MODELS);
+  const [isLoadingModels, setIsLoadingModels] = useState(true);
+  const [selectedModel, setSelectedModel] = useState(FALLBACK_MODELS[0].id);
   const [stores, setStores] = useState<KnowledgeStoreInfo[]>([]);
   const [activeStoreIds, setActiveStoreIds] = useState<string[]>([]);
   const [showStoreMenu, setShowStoreMenu] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [thinkingText, setThinkingText] = useState('');
+  const [showThinking, setShowThinking] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const thinkingEndRef = useRef<HTMLDivElement>(null);
 
   const loadStores = () => {
     const loadedStores = getKnowledgeStores();
@@ -47,6 +52,24 @@ export default function ChatInterface() {
 
   useEffect(() => {
     const init = async () => {
+      // 동적 모델 목록 불러오기
+      setIsLoadingModels(true);
+      try {
+        console.log('[ChatInterface] Starting model fetch...');
+        const fetched = await fetchAvailableModels();
+        if (fetched.length > 0) {
+          console.log(`[ChatInterface] Successfully loaded ${fetched.length} models dynamically. Selected: ${fetched[0].id}`);
+          setModels(fetched);
+          setSelectedModel(fetched[0].id);
+        } else {
+          console.warn('[ChatInterface] fetchAvailableModels returned 0 models -> using FALLBACK_MODELS');
+        }
+      } catch (err) {
+        console.error('[ChatInterface] Model fetch failed with error -> using FALLBACK_MODELS:', err);
+      } finally {
+        setIsLoadingModels(false);
+      }
+
       // Initialize the knowledge base file store in the background
       await initKnowledgeBase();
       loadStores();
@@ -66,6 +89,12 @@ export default function ChatInterface() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    if (thinkingText) {
+      thinkingEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [thinkingText]);
 
   const toggleStoreActive = (id: string) => {
     setActiveStoreIds(prev =>
@@ -95,6 +124,8 @@ export default function ChatInterface() {
     setMessages(prev => [...prev, userMsg]);
     setInput('');
     setIsLoading(true);
+    setThinkingText('');
+    setShowThinking(true);
     await saveMessage(userMsg);
 
     try {
@@ -122,6 +153,8 @@ export default function ChatInterface() {
 
       const modelMsgId = (Date.now() + 1).toString();
       let fullText = '';
+      let currentThinking = '';
+      let answerStarted = false;
 
       setMessages(prev => [...prev, {
         id: modelMsgId,
@@ -131,11 +164,20 @@ export default function ChatInterface() {
       }]);
 
       for await (const chunk of stream) {
-        const chunkText = (chunk as any).text || '';
-        fullText += chunkText;
-        setMessages(prev => prev.map(msg =>
-          msg.id === modelMsgId ? { ...msg, text: fullText } : msg
-        ));
+        if (chunk.type === 'thought') {
+          currentThinking += chunk.text;
+          setThinkingText(currentThinking);
+        } else {
+          if (!answerStarted) {
+            answerStarted = true;
+            // Fade out thinking when answer starts
+            setThinkingText('');
+          }
+          fullText += chunk.text;
+          setMessages(prev => prev.map(msg =>
+            msg.id === modelMsgId ? { ...msg, text: fullText } : msg
+          ));
+        }
       }
 
       await saveMessage({
@@ -242,11 +284,16 @@ export default function ChatInterface() {
           <select
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
-            className="text-sm border border-stone-300 rounded-md px-3 py-1.5 bg-stone-50 text-stone-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            disabled={isLoadingModels}
+            className="text-sm border border-stone-300 rounded-md px-3 py-1.5 bg-stone-50 text-stone-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-60"
           >
-            {MODELS.map(m => (
-              <option key={m.id} value={m.id}>{m.name}</option>
-            ))}
+            {isLoadingModels ? (
+              <option>모델 불러오는 중...</option>
+            ) : (
+              models.map(m => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))
+            )}
           </select>
           <button
             onClick={() => setShowClearConfirm(true)}
@@ -294,6 +341,52 @@ export default function ChatInterface() {
             </div>
           </div>
         ))}
+
+        {/* Thinking Summary Panel */}
+        {isLoading && thinkingText && (
+          <div className="max-w-3xl mx-auto thinking-panel-enter">
+            <div className="bg-gradient-to-br from-amber-50/90 to-orange-50/90 border border-amber-200/60 rounded-2xl shadow-sm overflow-hidden backdrop-blur-sm">
+              <button
+                onClick={() => setShowThinking(!showThinking)}
+                className="w-full flex items-center gap-2.5 px-4 py-3 text-left hover:bg-amber-100/30 transition-colors"
+              >
+                <div className="w-7 h-7 rounded-full bg-amber-100 flex items-center justify-center thinking-pulse">
+                  <Brain size={14} className="text-amber-600" />
+                </div>
+                <span className="text-sm font-medium text-amber-800 flex-1">AI가 생각하고 있어요...</span>
+                <ChevronDown
+                  size={16}
+                  className={`text-amber-400 transition-transform duration-200 ${showThinking ? 'rotate-180' : ''}`}
+                />
+              </button>
+              {showThinking && (
+                <div className="px-4 pb-3 thinking-content-enter">
+                  <div className="max-h-40 overflow-y-auto text-xs leading-relaxed text-amber-700/80 font-mono bg-white/40 rounded-xl px-3 py-2.5 border border-amber-100/50 thinking-text-scroll">
+                    {thinkingText}
+                    <span className="inline-block w-1.5 h-3.5 bg-amber-400 ml-0.5 animate-pulse rounded-sm" />
+                    <div ref={thinkingEndRef} />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Loading Indicator (when no thinking text yet) */}
+        {isLoading && !thinkingText && (
+          <div className="max-w-3xl mx-auto flex gap-4">
+            <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 flex-shrink-0">
+              <Bot size={16} />
+            </div>
+            <div className="px-5 py-3.5 rounded-2xl rounded-tl-sm bg-white border border-stone-200 shadow-sm">
+              <div className="flex items-center gap-2 text-stone-400">
+                <Loader2 size={16} className="animate-spin" />
+                <span className="text-sm">응답을 준비하고 있어요...</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 

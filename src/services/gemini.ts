@@ -42,13 +42,18 @@ ${safetyProtocol}
 ${sessionStructure}
 `;
 
-export async function sendMessageStream(
+export interface StreamChunk {
+  type: 'thought' | 'answer';
+  text: string;
+}
+
+export async function* sendMessageStream(
   model: string,
   history: { role: 'user' | 'model', text: string }[],
   message: string,
   contextString?: string,
   fileSearchStoreNames?: string[]
-) {
+): AsyncGenerator<StreamChunk> {
   const contents = history.map(h => ({
     role: h.role,
     parts: [{ text: h.text }]
@@ -68,6 +73,9 @@ export async function sendMessageStream(
   const config: any = {
     systemInstruction: finalInstruction,
     temperature: 0.7,
+    thinkingConfig: {
+      includeThoughts: true,
+    },
   };
 
   if (fileSearchStoreNames && fileSearchStoreNames.length > 0) {
@@ -103,7 +111,18 @@ export async function sendMessageStream(
     config: config
   });
 
-  return responseStream;
+  for await (const chunk of responseStream) {
+    const candidate = chunk.candidates?.[0];
+    if (!candidate?.content?.parts) continue;
+
+    for (const part of candidate.content.parts) {
+      if (!part.text) continue;
+      yield {
+        type: (part as any).thought ? 'thought' : 'answer',
+        text: part.text,
+      };
+    }
+  }
 }
 
 export async function generateEmbedding(text: string, isQuery: boolean = true): Promise<number[]> {
@@ -128,5 +147,51 @@ export async function generateEmbedding(text: string, isQuery: boolean = true): 
   } catch (error) {
     console.error('Error generating embedding:', error);
     throw error;
+  }
+}
+
+export interface GeminiModelInfo {
+  id: string;
+  name: string;
+}
+
+/**
+ * GoogleGenAI SDK를 통해 사용 가능한 모델 목록을 동적으로 가져옵니다.
+ * generateContent를 지원하는 모델만 필터링하여 반환합니다.
+ */
+export async function fetchAvailableModels(): Promise<GeminiModelInfo[]> {
+  try {
+    console.log('[ModelLoader] Fetching models via SDK ai.models.list()...');
+    const pager = await ai.models.list({ config: { pageSize: 1000 } });
+    console.log('[ModelLoader] Pager received:', {
+      pageLength: pager.page?.length ?? 'undefined',
+      pagerKeys: Object.keys(pager),
+    });
+
+    const models: GeminiModelInfo[] = [];
+    const modelList = pager.page || [];
+
+    if (modelList.length === 0) {
+      console.warn('[ModelLoader] pager.page is empty or undefined. Raw pager:', JSON.stringify(pager, null, 2));
+    }
+
+    for (const model of modelList) {
+      const actions: string[] = model.supportedActions || [];
+      if (actions.includes('generateContent')) {
+        const id = (model.name || '').replace(/^models\//, '');
+        const displayName = (model as any).displayName || id;
+        models.push({ id, name: displayName });
+      }
+    }
+
+    console.log(`[ModelLoader] Total models from API: ${modelList.length}, After filtering (generateContent): ${models.length}`);
+    if (models.length > 0) {
+      console.log('[ModelLoader] First 5 models:', models.slice(0, 5).map(m => `${m.id} (${m.name})`));
+    }
+
+    return models;
+  } catch (error) {
+    console.error('[ModelLoader] Failed to fetch models:', error);
+    return [];
   }
 }
