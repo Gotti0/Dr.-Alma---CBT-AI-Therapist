@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, User, Bot, Trash2, AlertTriangle, Paperclip, Loader2, Database, X, Check, FileText, Brain, ChevronDown } from 'lucide-react';
+import { Send, User, Bot, Trash2, AlertTriangle, Paperclip, Loader2, Database, X, Check, FileText, Brain, ChevronDown, Mic, Square } from 'lucide-react';
 import { sendMessageStream, StreamChunk, fetchAvailableModels, GeminiModelInfo } from '../services/gemini';
 import { ChatMessage, getRecentMessages, saveMessage, cleanExpiredCache, clearAllMessages } from '../services/sessionCache';
 import { retrieveRelevantContext, extractAndSaveMemory } from '../services/memoryManager';
 import { initKnowledgeBase, uploadUserKnowledge, KnowledgeStoreInfo, getKnowledgeStores, deleteKnowledgeStore } from '../services/knowledgeManager';
 import ReactMarkdown from 'react-markdown';
+import AudioPlayer from './AudioPlayer';
 const FALLBACK_MODELS: GeminiModelInfo[] = [
+  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview' },
   { id: 'gemini-2.5-flash-preview-05-20', name: 'Gemini 2.5 Flash Preview' },
   { id: 'gemini-2.5-pro-preview-05-06', name: 'Gemini 2.5 Pro Preview' },
 ];
@@ -31,9 +33,15 @@ export default function ChatInterface() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [thinkingText, setThinkingText] = useState('');
   const [showThinking, setShowThinking] = useState(true);
+  const [isRecording, setIsRecording] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const thinkingEndRef = useRef<HTMLDivElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
+  // TTS Settings
+  const [ttsVoice, setTtsVoice] = useState<string>('Kore'); // 기본값: 한국어 여성
 
   const loadStores = () => {
     const loadedStores = getKnowledgeStores();
@@ -111,13 +119,63 @@ export default function ChatInterface() {
     }
   };
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+  const handleStartRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
+      // 지원되는 mimeType 확인 (fallback 포함)
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : 'audio/mp4';
+
+      console.log('[Recording] Using mimeType:', mimeType);
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach(track => track.stop());
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64 = (reader.result as string).split(',')[1];
+          handleSend({ base64, mimeType });
+        };
+        reader.readAsDataURL(audioBlob);
+      };
+
+      // 250ms 간격으로 데이터를 수집하도록 timeslice 설정
+      mediaRecorder.start(250);
+      setIsRecording(true);
+      console.log('[Recording] Started');
+    } catch (err) {
+      console.error('마이크 접근 실패:', err);
+      alert('마이크에 접근할 수 없습니다. 브라우저 설정(또는 샌드박스 권한)에서 마이크 권한을 허용해주세요.');
+    }
+  };
+
+  const handleStopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const handleSend = async (audioData?: { base64: string; mimeType: string }) => {
+    if (!audioData && (!input.trim() || isLoading)) return;
+
+    const messageText = audioData ? (input.trim() || '🎙️ 음성 메시지') : input.trim();
     const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
-      text: input.trim(),
+      text: messageText,
       timestamp: Date.now(),
     };
 
@@ -148,7 +206,8 @@ export default function ChatInterface() {
         historyForApi,
         userMsg.text,
         retrievedContext,
-        activeStoreNames.length > 0 ? activeStoreNames : undefined
+        activeStoreNames.length > 0 ? activeStoreNames : undefined,
+        audioData
       );
 
       const modelMsgId = (Date.now() + 1).toString();
@@ -295,6 +354,45 @@ export default function ChatInterface() {
               ))
             )}
           </select>
+          <div className="hidden sm:flex items-center gap-2">
+            <span className="text-xs text-stone-500 uppercase font-medium tracking-wider">Voice:</span>
+            <select
+              value={ttsVoice}
+              onChange={(e) => setTtsVoice(e.target.value)}
+              className="text-sm border border-stone-300 rounded-md px-2 py-1.5 bg-stone-50 text-stone-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              <option value="Kore">Kore (여성, 차분/밝음)</option>
+              <option value="Aoede">Aoede (여성, 부드러움)</option>
+              <option value="Puck">Puck (남성, 경쾌함)</option>
+              <option value="Charon">Charon (남성, 중후함)</option>
+              <option value="Zephyr">Zephyr (여성, 하이톤/밝음)</option>
+              <option value="Fenrir">Fenrir (남성, 따뜻/친근)</option>
+              <option value="Leda">Leda (여성, 젊음/호기심)</option>
+              <option value="Orus">Orus (남성, 차분/캐주얼)</option>
+              <option value="Callirrhoe">Callirrhoe (여성, 친절/전문적)</option>
+              <option value="Autonoe">Autonoe (여성, 따뜻/격려)</option>
+              <option value="Enceladus">Enceladus (남성, 열정/따뜻)</option>
+              <option value="Iapetus">Iapetus (남성, 자신감/초대)</option>
+              <option value="Umbriel">Umbriel (남성, 호기심/공명)</option>
+              <option value="Algieba">Algieba (남성, 따뜻/명확)</option>
+              <option value="Despina">Despina (여성, 젊음/에너지)</option>
+              <option value="Erinome">Erinome (여성, 세련/자신감)</option>
+              <option value="Algenib">Algenib (남성, 부드러움/차분)</option>
+              <option value="Rasalgethi">Rasalgethi (남성, 젊음/에너지)</option>
+              <option value="Laomedeia">Laomedeia (여성, 젊음/호기심)</option>
+              <option value="Achernar">Achernar (여성, 부드러움/초대)</option>
+              <option value="Alnilam">Alnilam (남성, 젊음/밝음)</option>
+              <option value="Schedar">Schedar (남성, 시크릿/캐주얼)</option>
+              <option value="Gacrux">Gacrux (여성, 따뜻/매력)</option>
+              <option value="Pulcherrima">Pulcherrima (남성, 전진/호기심)</option>
+              <option value="Achird">Achird (남성, 따뜻/전문적)</option>
+              <option value="Zubenelgenubi">Zubenelgenubi (남성, 무거움/세련됨)</option>
+              <option value="Vindemiatrix">Vindemiatrix (여성, 따뜻/부드러움)</option>
+              <option value="Sadachbia">Sadachbia (남성, 생기/전문적)</option>
+              <option value="Sadaltager">Sadaltager (남성, 명확/접근성)</option>
+              <option value="Sulafat">Sulafat (여성, 따뜻/열정적)</option>
+            </select>
+          </div>
           <button
             onClick={() => setShowClearConfirm(true)}
             type="button"
@@ -333,6 +431,10 @@ export default function ChatInterface() {
                   <div className="prose prose-sm max-w-none prose-p:leading-relaxed prose-pre:bg-stone-100 prose-pre:text-stone-800">
                     <ReactMarkdown>{msg.text}</ReactMarkdown>
                   </div>
+                )}
+                {/* 모델 응답에만 AudioPlayer 지원. 환영 메시지 등도 ID가 있으므로 캐싱 가능 */}
+                {msg.role === 'model' && msg.text && !isLoading && (
+                  <AudioPlayer messageId={msg.id} text={msg.text} voiceName={ttsVoice} />
                 )}
               </div>
               <span className="text-[10px] text-stone-400 mt-1 px-1">
@@ -485,13 +587,27 @@ export default function ChatInterface() {
               rows={1}
               style={{ height: 'auto' }}
             />
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || isLoading}
-              className="absolute right-2 bottom-2 p-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-stone-300 text-white rounded-xl transition-colors flex items-center justify-center"
-            >
-              <Send size={18} />
-            </button>
+            {input.trim() ? (
+              <button
+                onClick={() => handleSend()}
+                disabled={isLoading}
+                className="absolute right-2 bottom-2 p-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-stone-300 text-white rounded-xl transition-colors flex items-center justify-center"
+              >
+                <Send size={18} />
+              </button>
+            ) : (
+              <button
+                onClick={isRecording ? handleStopRecording : handleStartRecording}
+                disabled={isLoading}
+                className={`absolute right-2 bottom-2 p-2 rounded-xl transition-colors flex items-center justify-center ${isRecording
+                  ? 'bg-red-500 hover:bg-red-600 text-white recording-pulse'
+                  : 'bg-emerald-600 hover:bg-emerald-700 disabled:bg-stone-300 text-white'
+                  }`}
+                title={isRecording ? '녹음 중지 및 전송' : '음성으로 말하기'}
+              >
+                {isRecording ? <Square size={18} /> : <Mic size={18} />}
+              </button>
+            )}
           </div>
         </div>
         <p className="text-center text-[10px] text-stone-400 mt-3">

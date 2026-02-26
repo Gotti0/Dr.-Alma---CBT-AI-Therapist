@@ -70,4 +70,22 @@
 
 .thinking-text-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(245, 158, 11, 0.4);
+  border-radius: 4px;
+}
+
+/* Recording Pulse Animation */
+@keyframes recording-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 4px rgba(239, 68, 68, 0.4);
+  }
+
+  50% {
+    box-shadow: 0 0 16px rgba(239, 68, 68, 0.7);
+  }
+}
+
+.recording-pulse {
+  animation: recording-glow 1.2s ease-in-out infinite;
 }

@@ -1,5 +1,7 @@
 {
   "name": "Dr. Alma - CBT AI Therapist",
   "description": "An AI-powered Cognitive Behavioral Therapy (CBT) agent that helps identify cognitive distortions and guides users through Socratic questioning.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "microphone"
+  ]
 }

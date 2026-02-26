@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Modality } from '@google/genai';
 import { safetyProtocol, sessionStructure } from './knowledgeBase';
 import { GOOGLE_SEARCH_DUMMY_ID } from './knowledgeManager';
 
@@ -52,16 +52,26 @@ export async function* sendMessageStream(
   history: { role: 'user' | 'model', text: string }[],
   message: string,
   contextString?: string,
-  fileSearchStoreNames?: string[]
+  fileSearchStoreNames?: string[],
+  audioData?: { base64: string; mimeType: string }
 ): AsyncGenerator<StreamChunk> {
   const contents = history.map(h => ({
     role: h.role,
     parts: [{ text: h.text }]
   }));
 
+  // 오디오 데이터가 있으면 inlineData 파트를 포함하여 전송
+  const userParts: any[] = [];
+  if (audioData) {
+    userParts.push({
+      inlineData: { mimeType: audioData.mimeType, data: audioData.base64 }
+    });
+  }
+  userParts.push({ text: message || '(음성 메시지)' });
+
   contents.push({
     role: 'user',
-    parts: [{ text: message }]
+    parts: userParts
   });
 
   let finalInstruction = systemInstruction;
@@ -194,4 +204,45 @@ export async function fetchAvailableModels(): Promise<GeminiModelInfo[]> {
     console.error('[ModelLoader] Failed to fetch models:', error);
     return [];
   }
+}
+
+/**
+ * Gemini TTS API를 사용하여 텍스트를 음성으로 변환합니다.
+ * @returns base64 인코딩된 PCM 오디오 데이터
+ */
+export async function generateTtsAudio(text: string, voiceName: string = 'Kore'): Promise<string> {
+  const ttsPrompt = `
+# AUDIO PROFILE: Dr. Alma
+## THE SCENE: A comfortable and warm therapy room
+The space is quiet, intimate, and safe, designed to make the user feel heard, understood, and relaxed.
+
+### DIRECTOR'S NOTES
+Style: Empathetic, warm, professional, and encouraging AI Cognitive Behavioral Therapist. The tone should be consistently supportive and non-judgmental. Use a subtle "vocal smile" to sound explicitly inviting, but maintain appropriate seriousness when discussing difficult emotions.
+Pacing: Measured, calm, and deliberate. Lean into a soothing cadence.
+Accent: Clear and articulate.
+
+### SAMPLE CONTEXT
+Dr. Alma is responding to a user sharing their thoughts or feelings, guiding them through CBT and mindfulness techniques with a highly compassionate attitude.
+
+#### TRANSCRIPT
+${text}`;
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash-preview-tts',
+    contents: [{ parts: [{ text: ttsPrompt }] }],
+    config: {
+      responseModalities: [Modality.AUDIO],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName },
+        },
+      },
+    },
+  });
+
+  const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+  if (!base64Audio) {
+    throw new Error('[TTS] 오디오 데이터가 응답에 없습니다.');
+  }
+  return base64Audio;
 }
