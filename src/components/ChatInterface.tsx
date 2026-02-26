@@ -26,6 +26,7 @@ export default function ChatInterface() {
   const [stores, setStores] = useState<KnowledgeStoreInfo[]>([]);
   const [activeStoreIds, setActiveStoreIds] = useState<string[]>([]);
   const [showStoreMenu, setShowStoreMenu] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -161,11 +162,17 @@ export default function ChatInterface() {
   };
 
   const handleClearChat = async () => {
-    if (window.confirm('대화 기록을 모두 삭제하시겠습니까?')) {
+    try {
       await clearAllMessages();
       const newWelcome = { ...WELCOME_MESSAGE, id: Date.now().toString(), timestamp: Date.now() };
       setMessages([newWelcome]);
       await saveMessage(newWelcome);
+    } catch (error) {
+      console.error('Failed to clear chat:', error);
+      // Fallback alert if custom modal fails, though custom modal is preferred
+      alert('대화 기록을 삭제하는 중 문제가 발생했습니다.');
+    } finally {
+      setShowClearConfirm(false);
     }
   };
 
@@ -242,7 +249,8 @@ export default function ChatInterface() {
             ))}
           </select>
           <button
-            onClick={handleClearChat}
+            onClick={() => setShowClearConfirm(true)}
+            type="button"
             className="text-stone-400 hover:text-red-500 transition-colors p-2 rounded-md hover:bg-stone-100"
             title="대화 초기화"
           >
@@ -397,6 +405,31 @@ export default function ChatInterface() {
           AI는 전문적인 의료 진단을 제공하지 않습니다. 위급한 상황일 경우 119 또는 109(자살예방상담전화)로 연락하세요.
         </p>
       </div>
+
+      {/* Clear Chat Confirm Modal */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50 p-4">
+          <div className="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full animate-in fade-in zoom-in-95 duration-200">
+            <h3 className="text-lg font-semibold text-stone-800 mb-2">대화 기록 삭제</h3>
+            <p className="text-stone-600 text-sm mb-6">모든 대화 기록을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.</p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                className="px-4 py-2 text-sm font-medium text-stone-600 hover:bg-stone-100 rounded-lg transition-colors"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleClearChat}
+                className="px-4 py-2 text-sm font-medium bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors"
+                disabled={isLoading}
+              >
+                삭제하기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
